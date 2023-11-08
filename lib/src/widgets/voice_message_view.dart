@@ -1,11 +1,13 @@
 import 'dart:async';
-
+import 'dart:io';
 import 'package:audio_waveforms/audio_waveforms.dart';
 import 'package:chatview/chatview.dart';
 import 'package:chatview/src/models/voice_message_configuration.dart';
 import 'package:chatview/src/widgets/reaction_widget.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:path_provider/path_provider.dart';
 
 class VoiceMessageView extends StatefulWidget {
   const VoiceMessageView({
@@ -57,18 +59,54 @@ class _VoiceMessageViewState extends State<VoiceMessageView> {
 
   PlayerWaveStyle playerWaveStyle = const PlayerWaveStyle(scaleFactor: 70);
 
-  @override
-  void initState() {
-    super.initState();
+  bool isLoading = true;
+
+  String path = '';
+
+  bool isURL(String input) {
+    Uri? uri = Uri.tryParse(input);
+
+    return uri != null && uri.hasScheme && uri.hasAuthority;
+  }
+
+  _downloadAndSaveTempFile(url) async {
+    Directory tempDir = await getTemporaryDirectory();
+    String tempPath = tempDir.path;
+    File tempFile = File('$tempPath/teste.mp3');
+
+    http.Response response = await http.get(Uri.parse(url));
+
+    await tempFile.writeAsBytes(response.bodyBytes, flush: true);
+
+    return tempFile.uri;
+  }
+
+  createController() async {
+    if (path != '') return;
+    setState(() {
+      isLoading = true;
+    });
+    var pathAudio;
+
+    if (isURL(widget.message.message)) {
+      pathAudio = await _downloadAndSaveTempFile(widget.message.message);
+    } else {
+      pathAudio = widget.message.message;
+    }
+
     controller = PlayerController()
       ..preparePlayer(
-        path: widget.message.message,
+        path: pathAudio.toString(),
         noOfSamples: widget.config?.playerWaveStyle
                 ?.getSamplesForWidth(widget.screenWidth * 0.5) ??
             playerWaveStyle.getSamplesForWidth(widget.screenWidth * 0.5),
       ).whenComplete(() => widget.onMaxDuration?.call(controller.maxDuration));
     playerStateSubscription = controller.onPlayerStateChanged
         .listen((state) => _playerState.value = state);
+    setState(() {
+      isLoading = false;
+      path = pathAudio.toString();
+    });
   }
 
   @override
@@ -122,20 +160,24 @@ class _VoiceMessageViewState extends State<VoiceMessageView> {
                 },
                 valueListenable: _playerState,
               ),
-              AudioFileWaveforms(
-                size: Size(widget.screenWidth * 0.50, 60),
-                playerController: controller,
-                waveformType: WaveformType.fitWidth,
-                playerWaveStyle:
-                    widget.config?.playerWaveStyle ?? playerWaveStyle,
-                padding: widget.config?.waveformPadding ??
-                    const EdgeInsets.only(right: 10),
-                margin: widget.config?.waveformMargin,
-                animationCurve: widget.config?.animationCurve ?? Curves.easeIn,
-                animationDuration: widget.config?.animationDuration ??
-                    const Duration(milliseconds: 500),
-                enableSeekGesture: widget.config?.enableSeekGesture ?? true,
-              ),
+              isLoading
+                  ? Container()
+                  : AudioFileWaveforms(
+                      size: Size(widget.screenWidth * 0.50, 60),
+                      playerController: controller,
+                      waveformType: WaveformType.fitWidth,
+                      playerWaveStyle:
+                          widget.config?.playerWaveStyle ?? playerWaveStyle,
+                      padding: widget.config?.waveformPadding ??
+                          const EdgeInsets.only(right: 10),
+                      margin: widget.config?.waveformMargin,
+                      animationCurve:
+                          widget.config?.animationCurve ?? Curves.easeIn,
+                      animationDuration: widget.config?.animationDuration ??
+                          const Duration(milliseconds: 500),
+                      enableSeekGesture:
+                          widget.config?.enableSeekGesture ?? true,
+                    ),
             ],
           ),
         ),
@@ -149,7 +191,7 @@ class _VoiceMessageViewState extends State<VoiceMessageView> {
     );
   }
 
-  void _playOrPause() {
+  void _playOrPause() async {
     assert(
       defaultTargetPlatform == TargetPlatform.iOS ||
           defaultTargetPlatform == TargetPlatform.android,
@@ -158,6 +200,7 @@ class _VoiceMessageViewState extends State<VoiceMessageView> {
     if (playerState.isInitialised ||
         playerState.isPaused ||
         playerState.isStopped) {
+      await createController();
       controller.startPlayer(finishMode: FinishMode.pause);
     } else {
       controller.pausePlayer();
